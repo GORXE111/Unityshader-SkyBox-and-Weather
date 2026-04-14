@@ -1,10 +1,9 @@
 {
-    "name": "GTA5Sky",
-    "rootNamespace": "GTA5Sky",
+    "name": "SkyPlanB",
+    "rootNamespace": "SkyPlanB",
     "references": [
         "Unity.RenderPipelines.Universal.Runtime",
-        "Unity.RenderPipelines.Core.Runtime",
-        "SkyPlanB"
+        "Unity.RenderPipelines.Core.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

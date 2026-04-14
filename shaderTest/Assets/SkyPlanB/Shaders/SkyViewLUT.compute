@@ -1,0 +1,169 @@
+// Compute shader: generates Sky View LUT (192x108) per frame
+// Based on Hillaire 2020 - "A Scalable and Production Ready Sky and Atmosphere Rendering Technique"
+#pragma kernel CSMain
+
+RWTexture2D<float4> _SkyViewLUT;
+Texture2D<float4> _TransmittanceLUT;
+SamplerState sampler_TransmittanceLUT;
+Texture2D<float4> _MultiScatterLUT;
+SamplerState sampler_MultiScatterLUT;
+
+float3 _SunDirection;
+float _CameraHeight; // km above ground
+float4 _SkyViewSize; // x=width, y=height, z=1/width, w=1/height
+
+// Physical constants (Hillaire 2020)
+static const float R_GROUND = 6360.0;
+static const float R_TOP = 6460.0;
+static const float3 SIGMA_R = float3(5.802, 13.558, 33.1) * 1e-3;
+static const float H_RAYLEIGH = 8.0;
+static const float SIGMA_M_S = 3.996e-3;
+static const float SIGMA_M_E = SIGMA_M_S + 4.40e-3;
+static const float H_MIE = 1.2;
+static const float MIE_G = 0.8;
+static const float3 SIGMA_O = float3(0.650, 1.881, 0.085) * 1e-3;
+static const float PI = 3.14159265359;
+static const float SOLAR_IRRADIANCE = 20.0;
+
+float3 Extinction(float h)
+{
+    float rd = exp(-h / H_RAYLEIGH);
+    float md = exp(-h / H_MIE);
+    float od = max(0, 1.0 - abs(h - 25.0) / 15.0);
+    return SIGMA_R * rd + SIGMA_M_E * md + SIGMA_O * od;
+}
+
+float3 Scattering(float h)
+{
+    float rd = exp(-h / H_RAYLEIGH);
+    float md = exp(-h / H_MIE);
+    return SIGMA_R * rd + SIGMA_M_S * md;
+}
+
+float RayleighPhase(float cosTheta)
+{
+    return 3.0 / (16.0 * PI) * (1.0 + cosTheta * cosTheta);
+}
+
+float MiePhase(float cosTheta, float g)
+{
+    float g2 = g * g;
+    float num = 3.0 * (1.0 - g2) * (1.0 + cosTheta * cosTheta);
+    float den = (8.0 * PI) * (2.0 + g2) * pow(max(1.0 + g2 - 2.0 * g * cosTheta, 0.0001), 1.5);
+    return num / den;
+}
+
+float2 RaySphereIntersect(float3 pos, float3 dir, float radius)
+{
+    float b = dot(pos, dir);
+    float c = dot(pos, pos) - radius * radius;
+    float disc = b * b - c;
+    if (disc < 0) return float2(-1, -1);
+    float sqrtDisc = sqrt(disc);
+    return float2(-b - sqrtDisc, -b + sqrtDisc);
+}
+
+float3 SampleTransmittance(float h, float cosZenith)
+{
+    float u = cosZenith * 0.5 + 0.5;
+    float v = sqrt(h / (R_TOP - R_GROUND));
+    return _TransmittanceLUT.SampleLevel(sampler_TransmittanceLUT, float2(u, v), 0).rgb;
+}
+
+float3 SampleMultiScatter(float h, float cosSunZenith)
+{
+    float u = cosSunZenith * 0.5 + 0.5;
+    float v = sqrt(h / (R_TOP - R_GROUND));
+    return _MultiScatterLUT.SampleLevel(sampler_MultiScatterLUT, float2(u, v), 0).rgb;
+}
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_SkyViewSize.x || id.y >= (uint)_SkyViewSize.y)
+        return;
+
+    float2 uv = (id.xy + 0.5) * _SkyViewSize.zw;
+
+    // Non-linear latitude mapping (Hillaire): more texels near horizon
+    float longitude = uv.x * 2.0 * PI; // [0, 2π]
+    float latitudeParam = uv.y * 2.0 - 1.0; // [-1, 1]
+    float latitude = sign(latitudeParam) * (latitudeParam * latitudeParam) * (PI * 0.5);
+
+    // View direction from latitude/longitude
+    float cosLat = cos(latitude);
+    float sinLat = sin(latitude);
+    float cosLon = cos(longitude);
+    float sinLon = sin(longitude);
+    float3 viewDir = float3(cosLat * sinLon, sinLat, cosLat * cosLon);
+
+    // Camera position on planet surface
+    float3 camPos = float3(0, R_GROUND + _CameraHeight, 0);
+
+    // Ray march through atmosphere
+    float2 tAtmo = RaySphereIntersect(camPos, viewDir, R_TOP);
+    float tMax = tAtmo.y;
+
+    // Check ground intersection
+    float2 tGround = RaySphereIntersect(camPos, viewDir, R_GROUND);
+    if (tGround.x > 0)
+        tMax = min(tMax, tGround.x);
+
+    if (tMax <= 0)
+    {
+        _SkyViewLUT[id.xy] = float4(0, 0, 0, 1);
+        return;
+    }
+
+    float3 sunDir = normalize(_SunDirection);
+    float cosViewSun = dot(viewDir, sunDir);
+
+    const int STEPS = 24;
+    float dt = tMax / STEPS;
+    float3 luminance = 0;
+    float3 transmittance = 1;
+
+    for (int i = 0; i < STEPS; i++)
+    {
+        float t = (i + 0.5) * dt;
+        float3 pos = camPos + viewDir * t;
+        float h = length(pos) - R_GROUND;
+        h = clamp(h, 0, R_TOP - R_GROUND);
+
+        float3 ext = Extinction(h);
+        float3 scat = Scattering(h);
+
+        // Transmittance to sun from this point
+        float cosSunZenith = dot(normalize(pos), sunDir);
+        float3 T_sun = SampleTransmittance(h, cosSunZenith);
+
+        // Check if sun is below ground from this point
+        float2 tSunGround = RaySphereIntersect(pos, sunDir, R_GROUND);
+        float shadow = (tSunGround.x > 0 && tSunGround.y > 0) ? 0.0 : 1.0;
+
+        // Phase functions
+        float phaseR = RayleighPhase(cosViewSun);
+        float phaseM = MiePhase(cosViewSun, MIE_G);
+
+        float rd = exp(-h / H_RAYLEIGH);
+        float md = exp(-h / H_MIE);
+
+        // Single scattering
+        float3 scatterR = SIGMA_R * rd * phaseR;
+        float3 scatterM = SIGMA_M_S * md * phaseM;
+        float3 inScatter = (scatterR + scatterM) * T_sun * shadow * SOLAR_IRRADIANCE;
+
+        // Multi scattering (from LUT)
+        float3 ms = SampleMultiScatter(h, cosSunZenith);
+        inScatter += ms * scat * SOLAR_IRRADIANCE * 0.5;
+
+        // Integrate
+        float3 sampleTransmittance = exp(-ext * dt);
+        // Analytical integration: (1 - e^(-ext*dt)) / ext * inScatter
+        float3 intScatter = (1.0 - sampleTransmittance) / max(ext, 0.0001) * inScatter;
+        luminance += transmittance * intScatter;
+        transmittance *= sampleTransmittance;
+    }
+
+    _SkyViewLUT[id.xy] = float4(luminance, 1);
+}

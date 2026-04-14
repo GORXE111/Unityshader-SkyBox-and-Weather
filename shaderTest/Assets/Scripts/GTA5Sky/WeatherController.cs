@@ -40,6 +40,7 @@ namespace GTA5Sky
         static void AutoCreate()
         {
             if (FindFirstObjectByType<WeatherController>() != null) return;
+            if (FindFirstObjectByType<SkyPlanB.HillaireSkyController>() != null) return;
 
             GameObject go = new GameObject("WeatherSystem");
             go.AddComponent<WeatherController>();

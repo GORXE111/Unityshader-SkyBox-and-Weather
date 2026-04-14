@@ -11,6 +11,7 @@ namespace GTA5Sky
         private static void AutoCreate()
         {
             if (Object.FindFirstObjectByType<DayNightCycle>() != null) return;
+            if (Object.FindFirstObjectByType<SkyPlanB.HillaireSkyController>() != null) return;
 
             WeatherController controller = Object.FindFirstObjectByType<WeatherController>();
             if (controller == null)

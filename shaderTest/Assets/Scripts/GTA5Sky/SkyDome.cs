@@ -76,6 +76,8 @@ namespace GTA5Sky
         static void AutoCreate()
         {
             if (FindFirstObjectByType<SkyDome>() != null) return;
+            // Don't auto-create if Plan B is active in this scene
+            if (FindFirstObjectByType<SkyPlanB.HillaireSkyController>() != null) return;
 
             GameObject go = new GameObject("SkyDome");
             go.AddComponent<SkyDome>();
