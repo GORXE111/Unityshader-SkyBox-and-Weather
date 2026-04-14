@@ -65,8 +65,23 @@ float2 RaySphereIntersect(float3 pos, float3 dir, float radius)
 
 float3 SampleTransmittance(float h, float cosZenith)
 {
-    float u = cosZenith * 0.5 + 0.5;
+    // Match Python's Hillaire non-linear UV mapping
     float v = sqrt(h / (R_TOP - R_GROUND));
+    float r = R_GROUND + h;
+    float cosHorizon = -sqrt(max(1.0 - (R_GROUND / r) * (R_GROUND / r), 0.0));
+    float u;
+    if (cosZenith < cosHorizon)
+    {
+        // Below horizon
+        float t = sqrt(max((cosHorizon - cosZenith) / (1.0 + cosHorizon), 0));
+        u = t * 0.5;
+    }
+    else
+    {
+        // Above horizon
+        float t = sqrt(max((cosZenith - cosHorizon) / (1.0 - cosHorizon), 0));
+        u = 0.5 + t * 0.5;
+    }
     return _TransmittanceLUT.SampleLevel(sampler_TransmittanceLUT, float2(u, v), 0).rgb;
 }
 
