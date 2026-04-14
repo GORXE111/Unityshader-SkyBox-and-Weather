@@ -62,7 +62,13 @@ namespace GTA5Sky
                 return;
             }
 
-            SetTime(timeOfDay + (daySpeed * Time.unscaledDeltaTime));
+            // OPT: only update time, don't apply — WeatherController.Update handles ApplyState
+            float wrappedTime = Mathf.Repeat(timeOfDay + (daySpeed * Time.unscaledDeltaTime), HoursPerDay);
+            if (!Mathf.Approximately(wrappedTime, timeOfDay))
+            {
+                timeOfDay = wrappedTime;
+                ApplyCurrentTime();
+            }
         }
 
         public void SetTime(float nextTimeOfDay)

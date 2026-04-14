@@ -239,7 +239,6 @@ namespace GTA5Sky
                     moonIntensity = snapshot.MoonIntensity,
                     moonInfluenceRadius = snapshot.MoonInfluenceRadius,
                     moonScatterIntensity = snapshot.MoonScatterIntensity,
-                    moonPhaseOffset = 0.08f,
                     moonFade = snapshot.MoonFade,
                     starfieldIntensity = snapshot.StarfieldIntensity,
                     cloudBaseColor = snapshot.CloudBaseColor,
@@ -435,21 +434,17 @@ namespace GTA5Sky
             return 12f;
         }
 
+        // OPT: cache light, only do scene search once
         Light ResolveDirectionalLight()
         {
-            if (RenderSettings.sun != null && RenderSettings.sun.type == LightType.Directional)
+            if (directionalLight != null)
             {
-                directionalLight = RenderSettings.sun;
                 return directionalLight;
             }
 
+            directionalLight = RenderSettings.sun;
             if (directionalLight != null && directionalLight.type == LightType.Directional)
             {
-                if (RenderSettings.sun != directionalLight)
-                {
-                    RenderSettings.sun = directionalLight;
-                }
-
                 return directionalLight;
             }
 
@@ -460,16 +455,11 @@ namespace GTA5Sky
                 if (candidate != null && candidate.type == LightType.Directional)
                 {
                     directionalLight = candidate;
-                    if (RenderSettings.sun != directionalLight)
-                    {
-                        RenderSettings.sun = directionalLight;
-                    }
-
+                    RenderSettings.sun = directionalLight;
                     return directionalLight;
                 }
             }
 
-            directionalLight = null;
             return null;
         }
     }
