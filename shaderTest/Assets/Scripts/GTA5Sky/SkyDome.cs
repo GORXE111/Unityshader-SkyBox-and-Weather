@@ -75,10 +75,7 @@ namespace GTA5Sky
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void AutoCreate()
         {
-            if (FindFirstObjectByType<SkyDome>() != null)
-            {
-                return;
-            }
+            if (FindFirstObjectByType<SkyDome>() != null) return;
 
             GameObject go = new GameObject("SkyDome");
             go.AddComponent<SkyDome>();

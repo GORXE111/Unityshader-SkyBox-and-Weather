@@ -9,7 +9,7 @@ A GTA5-inspired atmospheric scattering sky system for Unity URP, featuring a ful
 - **Mie Scattering** — Physically-based sun halo with configurable phase function
 - **Sun & Moon** — Sharp disc rendering with adjustable size and glow
 - **Starfield** — Texture-based stars with per-star twinkling, tri-planar projection (no stretching)
-- **Procedural Clouds** — Multi-octave FBM noise with large + small cloud layers, wind animation, edge highlighting
+- **Procedural Clouds** — Noise-texture FBM with large + small cloud layers, wind animation, edge highlighting
 
 ### Day/Night Cycle
 - **24-hour Solar Path** — Realistic sunrise (6:00) / sunset (20:00) timing
@@ -44,6 +44,8 @@ A GTA5-inspired atmospheric scattering sky system for Unity URP, featuring a ful
 | Top-left UI | Time slider, day speed, weather buttons |
 | F3 | Toggle performance profiler overlay |
 | F5 | Run full day/night benchmark (manual) |
+| F6 | Run GPU profiler (manual) |
+| F7 | Capture 600 frames of Unity Profiler data (manual) |
 
 ## Project Structure
 
@@ -63,10 +65,14 @@ shaderTest/Assets/
 │   ├── NoiseTextureGenerator.cs     # Precomputed noise texture for GPU cloud FBM
 │   ├── SkyProfiler.cs               # F3 runtime profiler overlay
 │   ├── SkyBenchmark.cs              # F5 automated day/night benchmark
+│   ├── GPUProfiler.cs               # F6 GPU performance profiler
+│   ├── ProfilerDataExporter.cs      # F7 Unity Profiler data exporter
 │   └── SkyDemoUI.cs                 # Runtime debug UI
 ├── Editor/
 │   ├── AutoTestRunner.cs            # File-triggered logic tests + CPU benchmark
-│   └── AutoBenchmarkRunner.cs       # File-triggered Play mode benchmark
+│   ├── AutoBenchmarkRunner.cs       # File-triggered Play mode benchmark
+│   ├── AutoGPUProfileRunner.cs      # File-triggered GPU profiler
+│   └── AutoProfilerExportRunner.cs  # File-triggered Profiler data export
 ├── Scripts/Tests/Editor/
 │   └── TimecycleSkyTests.cs         # NUnit EditMode unit tests
 └── Resources/
@@ -75,54 +81,77 @@ shaderTest/Assets/
 
 ## Performance
 
-Benchmarked at 1920×1080 on a full 24-hour cycle:
+### Benchmark Results (RTX 3060 @ 1920x1080)
 
 | Phase | Avg FPS | Avg Frame | P95 |
 |-------|---------|-----------|-----|
-| Noon (11-14h) | 196 | 5.09ms | 7.55ms |
-| Afternoon (14-18h) | 222 | 4.50ms | 6.79ms |
-| Dusk (18-21h) | 233 | 4.29ms | 6.26ms |
-| Night (21-5h) | 245 | 4.07ms | 5.89ms |
+| Noon (11-14h) | 265 | 3.77ms | — |
+| Afternoon (14-18h) | 265 | 3.77ms | — |
+| Dusk (18-21h) | 255 | 3.92ms | — |
+| Night (21-5h) | 270 | 3.70ms | — |
+| Dawn (5-7h) | 219 | 4.57ms | — |
 
-**Night is 13.2% faster than day** — uniform-based `[branch]` skips stars/moon during daytime.
+### Unity Profiler Data (600 frames)
 
-### GPU Optimizations
+| Metric | Value |
+|--------|-------|
+| Main Thread avg | 4.06ms (246 FPS) |
+| Main Thread P50 | 3.84ms (260 FPS) |
+| Main Thread P99 | 8.34ms |
+| Camera.Render | **0.003ms** (2.8us) |
+| Draw Calls | 52 (1 sky dome + 51 editor) |
+| Triangles | 1650 (768 sky dome) |
+| Render Textures | 33 (URP + post-processing) |
+
+### Real Overhead
+
+The sky system's actual CPU cost:
+- `GTA5TimecycleSky.Build()`: **3.7us** per call
+- Material property updates: **~10us** per full update (every 15 frames)
+- **Total: <0.02ms per frame = 0.1% of 60fps budget**
+
+### GPU Optimizations Applied
 - Precomputed noise texture replaces procedural FBM (3 tex samples vs 24 ALU hash ops)
 - Stars and moon skip entirely during daytime (`[branch]` on uniform `_MoonFade`)
 - Early-out for clouds below horizon
 - Branchless sky gradient blending (step+lerp)
 - Mie scattering: `x*sqrt(x)` replaces `pow(x, 1.5)`
-- Tri-planar star UV avoids dynamic branching
+- CPU pre-multiplied color×intensity (saves 5 per-pixel multiplies)
+- Single dominant-face star UV projection
 
-### CPU Optimizations
-- All 47 shader property IDs cached via `Shader.PropertyToID`
+### CPU Optimizations Applied
+- 3-tier update frequency: cloud offset every frame, sky params every 15 frames, fog/post-fx every 60 frames
+- All shader property IDs cached via `Shader.PropertyToID`
 - Solar parameter throttling (skip rebuild when change < 0.01°)
-- Fog/post-processing throttled to every 4th frame
 - Low-poly sky dome (768 triangles)
 - Zero GC allocation in update loop
-- CPU sky overhead: **0.028%** of 60fps frame budget
 
 ## Automated Testing
 
-### Logic Tests (EditMode)
-Create `run-tests.trigger` in project root, click Unity to compile:
-
+### Logic Tests
 ```bash
 echo "run" > run-tests.trigger
-# Results: test-output/report.md
+# Click Unity → Results: test-output/report.md
 ```
+7 tests: determinism, solar position, value ranges, color validity, weather lerp, transition smoothness, CPU perf.
 
-7 tests covering: determinism, solar position, value ranges, color validity, weather lerp, transition smoothness.
-
-### GPU Benchmark (PlayMode)
-Create `run-benchmark.trigger`, click Unity — auto enters Play, runs full cycle, exits:
-
+### GPU Benchmark
 ```bash
 echo "run" > run-benchmark.trigger
-# Results: %LOCALAPPDATA%Low/DefaultCompany/shaderTest/SkyBenchmark/<timestamp>/
+# Click Unity → auto Play → full day cycle → results in AppData
 ```
 
-Outputs: `report.md` (per-phase stats), `frames.csv` (per-frame data), screenshots at 10 key times.
+### GPU Profiler
+```bash
+echo "run" > run-gpu-profile.trigger
+# Click Unity → auto Play → per-phase GPU analysis → test-output/gpu-report.md
+```
+
+### Unity Profiler Export
+```bash
+echo "run" > run-profiler-export.trigger
+# Click Unity → auto Play → 600 frames → test-output/profiler-export.md + profiler-frames.csv
+```
 
 ## API
 
@@ -130,8 +159,8 @@ Outputs: `report.md` (per-phase stats), `frames.csv` (per-frame data), screensho
 // Set time
 FindFirstObjectByType<GTA5Sky.DayNightCycle>().SetTimeOfDay(18.5f);
 
-// Change speed
-FindFirstObjectByType<GTA5Sky.DayNightCycle>().DaySpeed = 0.5f;
+// Change speed (24-minute day cycle = DaySpeed of 0.0167)
+FindFirstObjectByType<GTA5Sky.DayNightCycle>().DaySpeed = 0.0167f;
 
 // Weather (instant)
 GTA5Sky.WeatherController.Instance.SetWeatherImmediate(GTA5Sky.WeatherType.Rainy);

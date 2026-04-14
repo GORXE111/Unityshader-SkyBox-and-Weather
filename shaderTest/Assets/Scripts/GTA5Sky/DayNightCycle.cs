@@ -10,10 +10,7 @@ namespace GTA5Sky
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void AutoCreate()
         {
-            if (Object.FindFirstObjectByType<DayNightCycle>() != null)
-            {
-                return;
-            }
+            if (Object.FindFirstObjectByType<DayNightCycle>() != null) return;
 
             WeatherController controller = Object.FindFirstObjectByType<WeatherController>();
             if (controller == null)
