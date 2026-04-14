@@ -17,3 +17,8 @@ Thumbs.db
 *.suo
 *.user
 /.claude/
+/knowledge/
+/test-output/
+/test-log.txt
+*.trigger
+*.flag

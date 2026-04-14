@@ -21,7 +21,9 @@ namespace GTA5Sky
             DontDestroyOnLoad(go);
         }
 
+        static readonly string ReadyFlag = "E:/ShaderUnityTest/benchmark-ready.flag";
         bool isRunning;
+        bool autoMode;
         string outputDir;
 
         // Timing data
@@ -37,10 +39,22 @@ namespace GTA5Sky
         // Key screenshot times: dawn, morning, noon, afternoon, dusk, night
         static readonly float[] screenshotTimes = { 5.5f, 7f, 9f, 12f, 15f, 18f, 20f, 22f, 0.5f, 3f };
 
+        void Start()
+        {
+            // Auto-start if triggered by AutoBenchmarkRunner
+            if (File.Exists(ReadyFlag))
+            {
+                File.Delete(ReadyFlag);
+                autoMode = true;
+                StartCoroutine(RunBenchmark());
+            }
+        }
+
         void Update()
         {
             if (Input.GetKeyDown(KeyCode.F5) && !isRunning)
             {
+                autoMode = false;
                 StartCoroutine(RunBenchmark());
             }
         }
@@ -127,6 +141,14 @@ namespace GTA5Sky
 
             Debug.Log($"[SkyBenchmark] Complete. {samples.Count} frames, {screenshotIdx} screenshots. See: {outputDir}");
             isRunning = false;
+
+            #if UNITY_EDITOR
+            if (autoMode)
+            {
+                Debug.Log("[SkyBenchmark] Auto mode — exiting Play mode.");
+                UnityEditor.EditorApplication.isPlaying = false;
+            }
+            #endif
         }
 
         void CaptureScreenshot(float timeOfDay)
