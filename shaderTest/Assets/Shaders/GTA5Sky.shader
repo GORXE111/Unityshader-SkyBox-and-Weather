@@ -92,11 +92,17 @@ Shader "GTA5Sky/Sky"
             #pragma vertex vert
             #pragma fragment frag
             #pragma target 3.5
+            #pragma multi_compile_local _ _NOISE_TEXTURE
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
             TEXTURE2D(_StarTex);
             SAMPLER(sampler_StarTex);
+
+            #ifdef _NOISE_TEXTURE
+            TEXTURE2D(_NoiseTex);
+            SAMPLER(sampler_NoiseTex);
+            #endif
 
             struct Attributes
             {
@@ -207,13 +213,20 @@ Shader "GTA5Sky/Sky"
                 return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
             }
 
-            // OPT: FBM reduced from 4 to 3 octaves (saves 25% noise ALU, visually identical for clouds)
+            // FBM: texture-based path replaces 24 ALU hash ops with 3 texture fetches
             float FBM(float2 p)
             {
+                #ifdef _NOISE_TEXTURE
+                float value = SAMPLE_TEXTURE2D(_NoiseTex, sampler_NoiseTex, p * 0.00390625).r * 0.5;
+                value += SAMPLE_TEXTURE2D(_NoiseTex, sampler_NoiseTex, p * 0.00390625 * 2.03).r * 0.25;
+                value += SAMPLE_TEXTURE2D(_NoiseTex, sampler_NoiseTex, p * 0.00390625 * 4.12).r * 0.125;
+                return value;
+                #else
                 float value = Noise2D(p) * 0.5;
                 value += Noise2D(p * 2.03) * 0.25;
                 value += Noise2D(p * 4.12) * 0.125;
                 return value;
+                #endif
             }
 
             float2 SkyUv(float3 viewDir, float scale)

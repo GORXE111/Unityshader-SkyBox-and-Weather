@@ -149,6 +149,11 @@ namespace GTA5Sky
             };
             skyMaterial.SetTexture("_StarTex", GTA5StarfieldTexture.GetOrCreate());
 
+            // OPT: bind noise texture for GPU-side FBM (3 tex samples vs 24 ALU hash ops)
+            Texture2D noiseTex = NoiseTextureGenerator.GetOrCreate();
+            skyMaterial.SetTexture(Shader.PropertyToID("_NoiseTex"), noiseTex);
+            skyMaterial.EnableKeyword("_NOISE_TEXTURE");
+
             meshRenderer.sharedMaterial = skyMaterial;
             meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
             meshRenderer.receiveShadows = false;

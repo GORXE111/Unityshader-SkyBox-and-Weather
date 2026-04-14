@@ -120,7 +120,7 @@ namespace GTA5Sky
             GUILayout.Label($"  TimecycleSky.Build:  {avgCpuBuild:F4}ms");
             GUILayout.Label($"  SetSkyParams:        {avgCpuSetParams:F4}ms");
             GUILayout.Label($"  Total Sky CPU:       {avgCpuTotal:F4}ms");
-            GUILayout.Label($"  % of frame:          {(avgCpuTotal / Mathf.Max(avgFrameMs, 0.001) * 100):F2}%");
+            GUILayout.Label($"  % of frame:          {(avgCpuTotal / System.Math.Max(avgFrameMs, 0.001) * 100):F2}%");
 
             GUILayout.Space(4);
             GUILayout.Label("--- GPU (Estimated) ---");
@@ -139,7 +139,12 @@ namespace GTA5Sky
             if (isNight) { estALU += 15; estALU += 30; } // moon + stars
             estALU += isTwilight ? 85 : 50; // clouds vary
 
+            string noiseMode = Shader.IsKeywordEnabled("_NOISE_TEXTURE") ? "Texture (3 samples)" : "Procedural (24 ALU)";
+            // Adjust ALU estimate for texture noise
+            if (noiseMode.StartsWith("Texture")) estALU -= 30;
+
             GUILayout.Label($"  Est. ALU/pixel:      ~{estALU}");
+            GUILayout.Label($"  Cloud noise:         {noiseMode}");
             GUILayout.Label($"  Clouds:              {cloudState}");
             GUILayout.Label($"  Stars:               {starState}");
             GUILayout.Label($"  Moon:                {moonState}");
@@ -153,6 +158,9 @@ namespace GTA5Sky
                     GUILayout.Label($"  Dome triangles:      {mf.sharedMesh.triangles.Length / 3}");
                 }
             }
+
+            GUILayout.Space(4);
+            GUILayout.Label("F3=profiler  F5=benchmark", new GUIStyle(GUI.skin.label) { fontSize = 10 });
 
             GUILayout.EndVertical();
             GUILayout.EndArea();

@@ -191,14 +191,25 @@ namespace GTA5Sky
             return runtimeSettings;
         }
 
+        // OPT: throttle slow-changing subsystems (fog, post-processing, ambient)
+        int frameCounter;
+        const int SlowUpdateInterval = 4; // update every 4th frame
+
         void ApplyState(WeatherTransition.WeatherState state)
         {
             WeatherTransition.WeatherState effectiveState = GetEffectiveState(state);
             GTA5TimecycleSky.Snapshot snapshot = GTA5TimecycleSky.Build(effectiveState, ResolveTimeOfDay(), Time.timeSinceLevelLoad);
 
+            // Sky + directional light: every frame (visible changes)
             ApplySky(snapshot);
-            ApplyFog(effectiveState, snapshot);
             ApplyDirectionalLight(effectiveState, snapshot);
+
+            // Fog, post-processing, ambient: every Nth frame (slow-changing)
+            frameCounter++;
+            if (frameCounter < SlowUpdateInterval) return;
+            frameCounter = 0;
+
+            ApplyFog(effectiveState, snapshot);
             ApplyPostProcessing(snapshot);
 
             RenderSettings.ambientLight = Color.Lerp(
