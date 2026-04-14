@@ -386,13 +386,13 @@ namespace GTA5Sky
 
             if (hours > SunSetTime)
             {
-                sunFade = 1f - Mathf.Clamp01((hours - SunMoonTime) * 4f);
-                moonFade = Mathf.Clamp01((hours - SunMoonTime - 0.25f) * 4f);
+                sunFade = 1f - Smooth01(Mathf.Clamp01((hours - SunMoonTime) * 2f));
+                moonFade = Smooth01(Mathf.Clamp01((hours - SunMoonTime - 0.25f) * 2f));
             }
             else if (hours < SunRiseTime)
             {
-                sunFade = Mathf.Clamp01((hours - MoonSunTime - 0.25f) * 4f);
-                moonFade = 1f - Mathf.Clamp01((hours - MoonSunTime) * 4f);
+                sunFade = Smooth01(Mathf.Clamp01((hours - MoonSunTime - 0.25f) * 2f));
+                moonFade = 1f - Smooth01(Mathf.Clamp01((hours - MoonSunTime) * 2f));
             }
 
             moonFade *= Mathf.Clamp01(moonDir.y / 0.1f);

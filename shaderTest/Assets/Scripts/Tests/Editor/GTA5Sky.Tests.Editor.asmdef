@@ -1,7 +1,11 @@
 {
     "name": "GTA5Sky.Tests.Editor",
     "rootNamespace": "GTA5Sky.Tests",
-    "references": [],
+    "references": [
+        "GTA5Sky",
+        "UnityEditor.TestRunner",
+        "UnityEngine.TestRunner"
+    ],
     "includePlatforms": ["Editor"],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

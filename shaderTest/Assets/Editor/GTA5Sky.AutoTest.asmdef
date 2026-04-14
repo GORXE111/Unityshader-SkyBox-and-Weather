@@ -1,0 +1,14 @@
+{
+    "name": "GTA5Sky.AutoTest",
+    "rootNamespace": "",
+    "references": ["GTA5Sky"],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
