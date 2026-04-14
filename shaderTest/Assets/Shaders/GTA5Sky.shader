@@ -240,11 +240,12 @@ Shader "GTA5Sky/Sky"
                 float azimuthBlend = sqrt(saturate(-viewDir.x * 0.5 + 0.5));
                 float zenithBlend = saturate(abs(viewDir.y));
 
-                float3 azimuthEast = _AzimuthEastColor.rgb * _AzimuthEastIntensity;
-                float3 azimuthWest = _AzimuthWestColor.rgb * _AzimuthWestIntensity;
-                float3 azimuthTransition = _AzimuthTransitionColor.rgb * _AzimuthTransitionIntensity;
-                float3 zenithColor = _ZenithColor.rgb * _ZenithIntensity;
-                float3 zenithTransition = _ZenithTransitionColor.rgb * _ZenithTransitionIntensity;
+                // OPT: colors pre-multiplied by intensity on CPU side
+                float3 azimuthEast = _AzimuthEastColor.rgb;
+                float3 azimuthWest = _AzimuthWestColor.rgb;
+                float3 azimuthTransition = _AzimuthTransitionColor.rgb;
+                float3 zenithColor = _ZenithColor.rgb;
+                float3 zenithTransition = _ZenithTransitionColor.rgb;
 
                 // OPT: branchless azimuth blend using smoothstep instead of if/else
                 float eps = 0.0001;
@@ -268,7 +269,7 @@ Shader "GTA5Sky/Sky"
                 float3 skyColor = lerp(skyLow, skyHigh, zMask);
 
                 float horizonBand = saturate(1.0 - abs(viewDir.y) / 0.09);
-                skyColor += _SkyPlaneColor.rgb * _SkyPlaneIntensity * horizonBand * _SkyPlaneColor.a;
+                skyColor += _SkyPlaneColor.rgb * horizonBand;
                 skyColor *= _SkyHdrIntensity;
 
                 float horizonFade = saturate((viewDir.y + 0.15) / 0.25);
@@ -291,7 +292,7 @@ Shader "GTA5Sky/Sky"
 
                 // OPT: skip moon entirely during daytime (uniform branch — no divergence)
                 float3 moonColor = 0;
-                [branch] if (_MoonFade > 0.001)
+                [branch] if (_MoonFade > 0.05)
                 {
                     float3 moonDir = normalize(_MoonDirection.xyz);
                     float moonCosTheta = dot(viewDir, moonDir);
@@ -310,22 +311,18 @@ Shader "GTA5Sky/Sky"
             {
                 // OPT: skip entirely during daytime (uniform branch — all pixels skip together)
                 float aboveHorizon = saturate(viewDir.y);
-                [branch] if (_MoonFade <= 0.001) return 0;
+                [branch] if (_MoonFade <= 0.05) return 0;
                 if (aboveHorizon <= 0.001) return 0;
 
+                // OPT: single dominant-face UV (saves computing 2 extra faces)
                 float3 absDir = abs(viewDir);
-                // Compute blend weights: dominant axis gets weight 1
-                float3 weights = step(absDir.yzx, absDir) * step(absDir.zxy, absDir);
-                // Fallback: if all zero (shouldn't happen), use Y
-                weights = max(weights, float3(0, step(absDir.x + absDir.z, 0.001), 0));
-
-                // Compute UV for each face
-                float2 uvY = viewDir.xz / max(absDir.y, 0.001) * 0.5 + 0.5;
-                float2 uvX = viewDir.yz / max(absDir.x, 0.001) * 0.5 + float2(3.2, 0.5);
-                float2 uvZ = viewDir.xy / max(absDir.z, 0.001) * 0.5 + float2(5.8, 0.5);
-
-                // Select dominant face UV (branchless)
-                float2 starUv = uvY * weights.y + uvX * weights.x + uvZ * weights.z;
+                float2 starUv;
+                if (absDir.y >= absDir.x && absDir.y >= absDir.z)
+                    starUv = viewDir.xz / max(absDir.y, 0.001) * 0.5 + 0.5;
+                else if (absDir.x >= absDir.z)
+                    starUv = viewDir.yz / max(absDir.x, 0.001) * 0.5 + float2(3.2, 0.5);
+                else
+                    starUv = viewDir.xy / max(absDir.z, 0.001) * 0.5 + float2(5.8, 0.5);
 
                 float2 tiledUv = frac(starUv * 1.5);
                 float4 starSample = SAMPLE_TEXTURE2D(_StarTex, sampler_StarTex, tiledUv);

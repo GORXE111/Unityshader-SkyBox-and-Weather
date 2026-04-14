@@ -181,25 +181,21 @@ namespace GTA5Sky
         {
             if (skyMaterial == null) return;
 
-            skyMaterial.SetColor(ID_AzimuthEastColor, p.azimuthEastColor);
-            skyMaterial.SetFloat(ID_AzimuthEastIntensity, p.azimuthEastIntensity);
-            skyMaterial.SetColor(ID_AzimuthWestColor, p.azimuthWestColor);
-            skyMaterial.SetFloat(ID_AzimuthWestIntensity, p.azimuthWestIntensity);
-            skyMaterial.SetColor(ID_AzimuthTransitionColor, p.azimuthTransitionColor);
-            skyMaterial.SetFloat(ID_AzimuthTransitionIntensity, p.azimuthTransitionIntensity);
+            // OPT: pre-multiply color × intensity on CPU, saves 5 per-pixel multiplies in shader
+            skyMaterial.SetColor(ID_AzimuthEastColor, p.azimuthEastColor * p.azimuthEastIntensity);
+            skyMaterial.SetColor(ID_AzimuthWestColor, p.azimuthWestColor * p.azimuthWestIntensity);
+            skyMaterial.SetColor(ID_AzimuthTransitionColor, p.azimuthTransitionColor * p.azimuthTransitionIntensity);
             skyMaterial.SetFloat(ID_AzimuthTransitionPos, p.azimuthTransitionPos);
 
-            skyMaterial.SetColor(ID_ZenithColor, p.zenithColor);
-            skyMaterial.SetFloat(ID_ZenithIntensity, p.zenithIntensity);
-            skyMaterial.SetColor(ID_ZenithTransitionColor, p.zenithTransitionColor);
-            skyMaterial.SetFloat(ID_ZenithTransitionIntensity, p.zenithTransitionIntensity);
+            skyMaterial.SetColor(ID_ZenithColor, p.zenithColor * p.zenithIntensity);
+            skyMaterial.SetColor(ID_ZenithTransitionColor, p.zenithTransitionColor * p.zenithTransitionIntensity);
             skyMaterial.SetFloat(ID_ZenithTransitionPos, p.zenithTransitionPos);
             skyMaterial.SetFloat(ID_ZenithTransEastBlend, p.zenithTransEastBlend);
             skyMaterial.SetFloat(ID_ZenithTransWestBlend, p.zenithTransWestBlend);
             skyMaterial.SetFloat(ID_ZenithBlendStart, p.zenithBlendStart);
             skyMaterial.SetFloat(ID_SkyHdrIntensity, p.skyHdrIntensity);
-            skyMaterial.SetColor(ID_SkyPlaneColor, p.skyPlaneColor);
-            skyMaterial.SetFloat(ID_SkyPlaneIntensity, p.skyPlaneIntensity);
+            // SkyPlane: pre-multiply color × intensity × alpha
+            skyMaterial.SetColor(ID_SkyPlaneColor, p.skyPlaneColor * p.skyPlaneIntensity * p.skyPlaneColor.a);
 
             skyMaterial.SetVector(ID_SunDirection, p.sunDirection);
             skyMaterial.SetColor(ID_SunColorHdr, p.sunColorHdr);
