@@ -4,22 +4,28 @@ A GTA5-inspired atmospheric scattering sky system for Unity URP, featuring a ful
 
 ## Features
 
+### Sky Rendering
 - **Procedural Sky Dome** — Runtime-generated sphere mesh with multi-layer gradient blending (azimuth, zenith, horizon band)
 - **Mie Scattering** — Physically-based sun halo with configurable phase function
 - **Sun & Moon** — Sharp disc rendering with adjustable size and glow
-- **Starfield** — Texture-based stars with per-star twinkling animation, tri-planar projection (no stretching)
+- **Starfield** — Texture-based stars with per-star twinkling, tri-planar projection (no stretching)
 - **Procedural Clouds** — Multi-octave FBM noise with large + small cloud layers, wind animation, edge highlighting
-- **Day/Night Cycle** — Smooth 24-hour solar path with realistic sunrise/sunset timing
+
+### Day/Night Cycle
+- **24-hour Solar Path** — Realistic sunrise (6:00) / sunset (20:00) timing
 - **Daytime Variation** — Sky color shifts with sun height (morning warm → noon saturated blue → afternoon golden)
-- **Twilight Colors** — Rose-pink, lavender-purple gradients during dawn/dusk
-- **Weather System** — 6 presets (Clear, Overcast, Rainy, Thunder, Foggy, Smog) with smooth transitions
-- **Post-Processing** — Auto-configured URP Volume with ACES tonemapping, bloom, color adjustments
-- **Directional Light** — Automatic sun/moon light direction, color, shadow control
-- **Fog** — Exponential squared fog synced with sky and weather state
+- **Twilight Colors** — Rose-pink, lavender-purple gradients during dawn/dusk (Genshin-inspired)
+- **Smooth Transitions** — Hermite-interpolated sunrise/sunset fades, no discontinuities
+
+### Weather System
+- **6 Presets** — Clear, Overcast, Rainy, Thunder, Foggy, Smog
+- **Smooth Transitions** — Configurable duration weather blending
+- **Post-Processing** — Auto-configured URP Volume (ACES tonemapping, bloom, color adjustments)
+- **Fog & Lighting** — Exponential squared fog + directional light synced with sky state
 
 ## Requirements
 
-- Unity 2022.3+ (tested with 2022.3 LTS)
+- Unity 2022.3+ (tested with 2022.3.62f3)
 - Universal Render Pipeline (URP) 14.x
 
 ## Quick Start
@@ -31,66 +37,106 @@ A GTA5-inspired atmospheric scattering sky system for Unity URP, featuring a ful
 5. Ensure your scene has a **Camera** and a **Directional Light**
 6. Press **Play** — everything auto-initializes
 
-A runtime UI panel appears in the top-left corner with:
-- Time of day slider (0-24h)
-- Day speed control
-- Weather preset buttons
+### Runtime Controls
+
+| Key | Function |
+|-----|----------|
+| Top-left UI | Time slider, day speed, weather buttons |
+| F3 | Toggle performance profiler overlay |
+| F5 | Run full day/night benchmark (manual) |
 
 ## Project Structure
 
 ```
 shaderTest/Assets/
 ├── Shaders/
-│   └── GTA5Sky.shader          # Sky dome shader (scattering, clouds, stars, sun/moon)
+│   └── GTA5Sky.shader              # Sky dome shader (scattering, clouds, stars, sun/moon)
 ├── Scripts/GTA5Sky/
-│   ├── DayNightCycle.cs         # Time management & solar position
-│   ├── GTA5TimecycleSky.cs      # Core: 88-parameter sky snapshot from time + weather
-│   ├── SkyDome.cs               # Dome mesh generation & material parameter binding
-│   ├── WeatherController.cs     # Central orchestrator (sky, fog, light, post-processing)
-│   ├── WeatherSettings.cs       # Weather profile ScriptableObject with 6 presets
-│   ├── WeatherTransition.cs     # Smooth weather state interpolation
-│   ├── WeatherType.cs           # Weather enum
-│   ├── GTA5StarfieldTexture.cs  # Starfield texture loader
-│   └── SkyDemoUI.cs             # Runtime debug UI
+│   ├── DayNightCycle.cs             # Time management & solar position
+│   ├── GTA5TimecycleSky.cs          # Core: 88-parameter sky snapshot builder
+│   ├── SkyDome.cs                   # Dome mesh generation & material binding
+│   ├── WeatherController.cs         # Central orchestrator (sky, fog, light, post-fx)
+│   ├── WeatherSettings.cs           # Weather profile ScriptableObject (6 presets)
+│   ├── WeatherTransition.cs         # Smooth weather state interpolation
+│   ├── WeatherType.cs               # Weather enum
+│   ├── GTA5StarfieldTexture.cs      # Starfield texture loader
+│   ├── NoiseTextureGenerator.cs     # Precomputed noise texture for GPU cloud FBM
+│   ├── SkyProfiler.cs               # F3 runtime profiler overlay
+│   ├── SkyBenchmark.cs              # F5 automated day/night benchmark
+│   └── SkyDemoUI.cs                 # Runtime debug UI
+├── Editor/
+│   ├── AutoTestRunner.cs            # File-triggered logic tests + CPU benchmark
+│   └── AutoBenchmarkRunner.cs       # File-triggered Play mode benchmark
+├── Scripts/Tests/Editor/
+│   └── TimecycleSkyTests.cs         # NUnit EditMode unit tests
 └── Resources/
-    └── StarfieldTex.png         # Star texture (1024x1024)
+    └── StarfieldTex.png             # Star texture (1024x1024)
 ```
 
 ## Performance
 
-The system is optimized for real-time rendering:
+Benchmarked at 1920×1080 on a full 24-hour cycle:
 
-**GPU:**
-- 3-octave FBM noise (optimized from 4)
-- Early-out for clouds below horizon and in clear areas
-- Branchless sky gradient blending
-- Mie scattering uses `x * sqrt(x)` instead of `pow(x, 1.5)`
-- Tri-planar star projection avoids dynamic branching
+| Phase | Avg FPS | Avg Frame | P95 |
+|-------|---------|-----------|-----|
+| Noon (11-14h) | 196 | 5.09ms | 7.55ms |
+| Afternoon (14-18h) | 222 | 4.50ms | 6.79ms |
+| Dusk (18-21h) | 233 | 4.29ms | 6.26ms |
+| Night (21-5h) | 245 | 4.07ms | 5.89ms |
 
-**CPU:**
-- All shader property IDs cached (`Shader.PropertyToID`)
+**Night is 13.2% faster than day** — uniform-based `[branch]` skips stars/moon during daytime.
+
+### GPU Optimizations
+- Precomputed noise texture replaces procedural FBM (3 tex samples vs 24 ALU hash ops)
+- Stars and moon skip entirely during daytime (`[branch]` on uniform `_MoonFade`)
+- Early-out for clouds below horizon
+- Branchless sky gradient blending (step+lerp)
+- Mie scattering: `x*sqrt(x)` replaces `pow(x, 1.5)`
+- Tri-planar star UV avoids dynamic branching
+
+### CPU Optimizations
+- All 47 shader property IDs cached via `Shader.PropertyToID`
+- Solar parameter throttling (skip rebuild when change < 0.01°)
+- Fog/post-processing throttled to every 4th frame
 - Low-poly sky dome (768 triangles)
 - Zero GC allocation in update loop
-- Directional light cached after first lookup
-- Sky update skipped when time hasn't changed
+- CPU sky overhead: **0.028%** of 60fps frame budget
 
-## Customization
+## Automated Testing
 
-### Time Control (Runtime)
-```csharp
-// Set time directly
-FindFirstObjectByType<GTA5Sky.DayNightCycle>().SetTimeOfDay(18.5f); // 6:30 PM
+### Logic Tests (EditMode)
+Create `run-tests.trigger` in project root, click Unity to compile:
 
-// Change day speed
-FindFirstObjectByType<GTA5Sky.DayNightCycle>().DaySpeed = 0.5f;
+```bash
+echo "run" > run-tests.trigger
+# Results: test-output/report.md
 ```
 
-### Weather Control (Runtime)
+7 tests covering: determinism, solar position, value ranges, color validity, weather lerp, transition smoothness.
+
+### GPU Benchmark (PlayMode)
+Create `run-benchmark.trigger`, click Unity — auto enters Play, runs full cycle, exits:
+
+```bash
+echo "run" > run-benchmark.trigger
+# Results: %LOCALAPPDATA%Low/DefaultCompany/shaderTest/SkyBenchmark/<timestamp>/
+```
+
+Outputs: `report.md` (per-phase stats), `frames.csv` (per-frame data), screenshots at 10 key times.
+
+## API
+
 ```csharp
-// Instant weather change
+// Set time
+FindFirstObjectByType<GTA5Sky.DayNightCycle>().SetTimeOfDay(18.5f);
+
+// Change speed
+FindFirstObjectByType<GTA5Sky.DayNightCycle>().DaySpeed = 0.5f;
+
+// Weather (instant)
 GTA5Sky.WeatherController.Instance.SetWeatherImmediate(GTA5Sky.WeatherType.Rainy);
 
-// Smooth transition (30 seconds default)
+// Weather (smooth 30s transition)
 GTA5Sky.WeatherController.Instance.SetWeather(GTA5Sky.WeatherType.Foggy);
 ```
 
