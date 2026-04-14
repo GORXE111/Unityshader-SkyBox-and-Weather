@@ -158,6 +158,10 @@ namespace GTA5Sky
                 return;
             }
 
+            // Force full update on next frame
+            skyFrameCounter = SkyFullUpdateInterval;
+            slowFrameCounter = SlowUpdateInterval;
+            hasSnapshot = false;
             ApplyState(transition.CurrentState);
         }
 
@@ -191,39 +195,67 @@ namespace GTA5Sky
             return runtimeSettings;
         }
 
-        // OPT: throttle slow-changing subsystems (fog, post-processing, ambient)
-        int frameCounter;
-        const int SlowUpdateInterval = 4; // update every 4th frame
+        // OPT: 3-tier update frequency for 24-minute day cycle
+        //   Every frame:     cloud offset only (1 Material.Set call)
+        //   Every 15 frames: full sky params + directional light (46 Set calls + light)
+        //   Every 60 frames: fog, post-processing, ambient (slowest-changing)
+        int skyFrameCounter;
+        int slowFrameCounter;
+        const int SkyFullUpdateInterval = 15;   // ~4x per second at 60fps
+        const int SlowUpdateInterval = 60;      // ~1x per second at 60fps
+        GTA5TimecycleSky.Snapshot cachedSnapshot;
+        bool hasSnapshot;
 
         void ApplyState(WeatherTransition.WeatherState state)
         {
-            WeatherTransition.WeatherState effectiveState = GetEffectiveState(state);
-            GTA5TimecycleSky.Snapshot snapshot = GTA5TimecycleSky.Build(effectiveState, ResolveTimeOfDay(), Time.timeSinceLevelLoad);
+            skyFrameCounter++;
+            slowFrameCounter++;
 
-            // Sky + directional light: every frame (visible changes)
-            ApplySky(snapshot);
-            ApplyDirectionalLight(effectiveState, snapshot);
+            bool fullSkyUpdate = !hasSnapshot || skyFrameCounter >= SkyFullUpdateInterval;
+            bool slowUpdate = !hasSnapshot || slowFrameCounter >= SlowUpdateInterval;
 
-            // Fog, post-processing, ambient: every Nth frame (slow-changing)
-            frameCounter++;
-            if (frameCounter < SlowUpdateInterval) return;
-            frameCounter = 0;
+            if (fullSkyUpdate)
+            {
+                skyFrameCounter = 0;
+                WeatherTransition.WeatherState effectiveState = GetEffectiveState(state);
+                cachedSnapshot = GTA5TimecycleSky.Build(effectiveState, ResolveTimeOfDay(), Time.timeSinceLevelLoad);
+                hasSnapshot = true;
 
-            ApplyFog(effectiveState, snapshot);
-            ApplyPostProcessing(snapshot);
+                // Full sky params (46 calls) + directional light
+                ApplySky(cachedSnapshot, true);
+                ApplyDirectionalLight(effectiveState, cachedSnapshot);
 
-            RenderSettings.ambientLight = Color.Lerp(
-                effectiveState.AmbientLight * 0.28f,
-                effectiveState.AmbientLight,
-                Mathf.Clamp01(snapshot.DayNightBalance + 0.2f));
+                if (slowUpdate)
+                {
+                    slowFrameCounter = 0;
+                    ApplyFog(effectiveState, cachedSnapshot);
+                    ApplyPostProcessing(cachedSnapshot);
+                    RenderSettings.ambientLight = Color.Lerp(
+                        effectiveState.AmbientLight * 0.28f,
+                        effectiveState.AmbientLight,
+                        Mathf.Clamp01(cachedSnapshot.DayNightBalance + 0.2f));
+                }
+            }
+            else
+            {
+                // Fast path: only update cloud animation offset (1 call)
+                float cloudOffset = Mathf.Repeat(Time.timeSinceLevelLoad *
+                    Mathf.Lerp(0.0015f, 0.012f, state.WindSpeed), 1000f);
+
+                SkyDome skyDome = SkyDome.Instance;
+                if (skyDome != null)
+                {
+                    skyDome.SetSkyParamsFast(new SkyDome.SkyParams { cloudOffset = cloudOffset });
+                }
+            }
         }
 
-        void ApplySky(GTA5TimecycleSky.Snapshot snapshot)
+        void ApplySky(GTA5TimecycleSky.Snapshot snapshot, bool fullUpdate = true)
         {
             SkyDome skyDome = SkyDome.Instance;
             if (skyDome != null)
             {
-                skyDome.SetSkyParams(new SkyDome.SkyParams
+                var skyParams = new SkyDome.SkyParams
                 {
                     azimuthEastColor = snapshot.AzimuthEastColor,
                     azimuthEastIntensity = snapshot.AzimuthEastIntensity,
@@ -283,7 +315,12 @@ namespace GTA5Sky
                     noiseThreshold = snapshot.NoiseThreshold,
                     noiseSoftness = snapshot.NoiseSoftness,
                     noiseDensityOffset = snapshot.NoiseDensityOffset
-                });
+                };
+
+                if (fullUpdate)
+                    skyDome.SetSkyParamsFull(skyParams);
+                else
+                    skyDome.SetSkyParamsFast(skyParams);
             }
 
             RenderSettings.skybox = null;

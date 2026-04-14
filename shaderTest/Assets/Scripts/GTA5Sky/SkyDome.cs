@@ -163,14 +163,24 @@ namespace GTA5Sky
             gameObject.layer = 0;
         }
 
-        public void SetSkyParams(SkyParams p)
+        /// <summary>
+        /// Fast params: updated every frame (cloud animation).
+        /// Only 1 Material.Set call.
+        /// </summary>
+        public void SetSkyParamsFast(SkyParams p)
         {
-            if (skyMaterial == null)
-            {
-                return;
-            }
+            if (skyMaterial == null) return;
+            skyMaterial.SetFloat(ID_CloudOffset, p.cloudOffset);
+        }
 
-            // OPT: all calls use cached int IDs instead of string lookups
+        /// <summary>
+        /// Full params: updated every N frames (all colors, directions, intensities).
+        /// 46 Material.Set calls.
+        /// </summary>
+        public void SetSkyParamsFull(SkyParams p)
+        {
+            if (skyMaterial == null) return;
+
             skyMaterial.SetColor(ID_AzimuthEastColor, p.azimuthEastColor);
             skyMaterial.SetFloat(ID_AzimuthEastIntensity, p.azimuthEastIntensity);
             skyMaterial.SetColor(ID_AzimuthWestColor, p.azimuthWestColor);
