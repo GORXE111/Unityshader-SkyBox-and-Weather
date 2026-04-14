@@ -129,14 +129,24 @@ namespace GTA5Sky
             }
         }
 
+        // OPT: track last applied values to skip redundant updates
+        float lastAppliedAzimuth = -999f;
+        float lastAppliedZenith = -999f;
+        const float SolarThreshold = 0.01f;
+
         public void SetSolarParameters(float sunAzimuth, float sunZenith)
         {
             hasSolarOverride = true;
             overrideSunAzimuth = Mathf.Repeat(sunAzimuth, 360f);
             overrideSunZenith = Mathf.Clamp(sunZenith, -90f, 90f);
 
-            if (isInitialized)
+            // OPT: skip if solar params barely changed (< 0.01 degree)
+            if (isInitialized &&
+                (Mathf.Abs(overrideSunAzimuth - lastAppliedAzimuth) > SolarThreshold ||
+                 Mathf.Abs(overrideSunZenith - lastAppliedZenith) > SolarThreshold))
             {
+                lastAppliedAzimuth = overrideSunAzimuth;
+                lastAppliedZenith = overrideSunZenith;
                 ApplyState(transition.CurrentState);
             }
         }

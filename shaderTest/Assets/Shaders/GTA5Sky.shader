@@ -276,22 +276,29 @@ Shader "GTA5Sky/Sky"
                 float3 sunColor = _SunColorHdr.rgb * ((_SunHdrIntensity * sunScatter * 0.35) + (_SunHdrIntensity * sunHalo * 0.15) + (_SunHdrIntensity * sunDisc * 1.0));
                 sunColor += _SunDiscColor.rgb * (sunDisc * _SunFade * 0.6);
 
-                float3 moonDir = normalize(_MoonDirection.xyz);
-                float moonCosTheta = dot(viewDir, moonDir);
-                float moonHalo = smoothstep(_MoonInfluenceRadius, 0.0, 1.0 - moonCosTheta);
-                float moonRadius = _MoonDiscSize * 0.0012;
-                float moonDisc = smoothstep(moonRadius, moonRadius * 0.97, 1.0 - moonCosTheta);
-                float3 moonColor = _MoonColor.rgb * _MoonFade * (
-                    moonHalo * _MoonScatterIntensity * 0.8 +
-                    moonDisc * _MoonIntensity * 4.0);
+                // OPT: skip moon entirely during daytime (uniform branch — no divergence)
+                float3 moonColor = 0;
+                [branch] if (_MoonFade > 0.001)
+                {
+                    float3 moonDir = normalize(_MoonDirection.xyz);
+                    float moonCosTheta = dot(viewDir, moonDir);
+                    float moonHalo = smoothstep(_MoonInfluenceRadius, 0.0, 1.0 - moonCosTheta);
+                    float moonRadius = _MoonDiscSize * 0.0012;
+                    float moonDisc = smoothstep(moonRadius, moonRadius * 0.97, 1.0 - moonCosTheta);
+                    moonColor = _MoonColor.rgb * _MoonFade * (
+                        moonHalo * _MoonScatterIntensity * 0.8 +
+                        moonDisc * _MoonIntensity * 4.0);
+                }
 
                 return sunColor + moonColor;
             }
 
-            // OPT: branchless tri-planar using blend weights instead of if/else
             float3 ComputeStars(float3 viewDir)
             {
+                // OPT: skip entirely during daytime (uniform branch — all pixels skip together)
                 float aboveHorizon = saturate(viewDir.y);
+                [branch] if (_MoonFade <= 0.001) return 0;
+                if (aboveHorizon <= 0.001) return 0;
 
                 float3 absDir = abs(viewDir);
                 // Compute blend weights: dominant axis gets weight 1
