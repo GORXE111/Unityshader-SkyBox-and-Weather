@@ -1,0 +1,18 @@
+# Unity
+shaderTest/Library/
+shaderTest/Temp/
+shaderTest/Logs/
+shaderTest/UserSettings/
+shaderTest/obj/
+shaderTest/*.csproj
+shaderTest/*.sln
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vs/
+.idea/
+*.suo
+*.user
