@@ -25,11 +25,11 @@ namespace SkyPlanB
         [Header("Sun")]
         [SerializeField] Light directionalLight;
         [SerializeField] Color sunColor = new Color(1f, 0.98f, 0.92f);
-        [SerializeField] float sunIntensity = 30f;
-        [SerializeField] float sunDiscSize = 0.9995f;
+        [SerializeField] float sunIntensity = 50f;
+        [SerializeField] float sunDiscSize = 0.9997f;
 
         [Header("Display")]
-        [SerializeField] float exposure = 8f;
+        [SerializeField] float exposure = 15f;
         [SerializeField] float cameraHeight = 0.001f; // km above ground
 
         [Header("Day/Night")]
