@@ -18,6 +18,9 @@ namespace SkyPlanB
         [Header("Textures")]
         [SerializeField] Texture2D transmittanceLUT;
         [SerializeField] Texture2D multiScatterLUT;
+        [SerializeField] TextAsset multiScatterRawData; // .bytes file with float32 RGB
+
+        Texture2D multiScatterFloat; // runtime float texture
 
         [Header("Sun")]
         [SerializeField] Light directionalLight;
@@ -53,8 +56,42 @@ namespace SkyPlanB
 
         void Awake()
         {
+            LoadMultiScatterFloat();
             CreateSkyViewRT();
             CreateDome();
+        }
+
+        void LoadMultiScatterFloat()
+        {
+            if (multiScatterRawData == null) return;
+
+            byte[] raw = multiScatterRawData.bytes;
+            int w = System.BitConverter.ToInt32(raw, 0);
+            int h = System.BitConverter.ToInt32(raw, 4);
+            int headerSize = 8;
+            int pixelCount = w * h;
+
+            multiScatterFloat = new Texture2D(w, h, TextureFormat.RGBAFloat, false)
+            {
+                name = "MultiScatterLUT_Float",
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear,
+                hideFlags = HideFlags.DontSave
+            };
+
+            var colors = new Color[pixelCount];
+            for (int i = 0; i < pixelCount; i++)
+            {
+                int offset = headerSize + i * 12; // 3 floats × 4 bytes
+                float r = System.BitConverter.ToSingle(raw, offset);
+                float g = System.BitConverter.ToSingle(raw, offset + 4);
+                float b = System.BitConverter.ToSingle(raw, offset + 8);
+                colors[i] = new Color(r, g, b, 1f);
+            }
+
+            multiScatterFloat.SetPixels(colors);
+            multiScatterFloat.Apply(false, true);
+            Debug.Log($"[HillaireSky] Loaded float MultiScatter LUT: {w}x{h}");
         }
 
         void OnDestroy()
@@ -65,6 +102,7 @@ namespace SkyPlanB
                 Destroy(skyViewRT);
             }
             if (skyMaterial != null) Destroy(skyMaterial);
+            if (multiScatterFloat != null) Destroy(multiScatterFloat);
         }
 
         void Update()
@@ -169,8 +207,10 @@ namespace SkyPlanB
 
             if (transmittanceLUT != null)
                 skyViewCompute.SetTexture(kernelId, ID_TransmittanceLUT, transmittanceLUT);
-            if (multiScatterLUT != null)
-                skyViewCompute.SetTexture(kernelId, ID_MultiScatterLUT, multiScatterLUT);
+            // Prefer float texture, fallback to 8-bit PNG
+            Texture msTexture = multiScatterFloat != null ? (Texture)multiScatterFloat : multiScatterLUT;
+            if (msTexture != null)
+                skyViewCompute.SetTexture(kernelId, ID_MultiScatterLUT, msTexture);
 
             skyViewCompute.SetVector(ID_SunDirection, sunDir);
             skyViewCompute.SetFloat(ID_CameraHeight, cameraHeight);
