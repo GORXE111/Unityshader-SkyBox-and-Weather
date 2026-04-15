@@ -3,12 +3,20 @@ Shader "SkyPlanB/HillaireSky"
     Properties
     {
         _SkyViewLUT ("Sky View LUT", 2D) = "black" {}
+        _StarTex ("Star Texture", 2D) = "black" {}
         _SunDirection ("Sun Direction", Vector) = (0, 0.5, 0.5, 0)
+        _MoonDirection ("Moon Direction", Vector) = (0, 0.3, -0.5, 0)
         _SunColor ("Sun Color", Color) = (1, 0.98, 0.92, 1)
+        _MoonColor ("Moon Color", Color) = (0.6, 0.7, 0.9, 1)
         _SunIntensity ("Sun Intensity", Float) = 50
+        _MoonIntensity ("Moon Intensity", Float) = 0.6
         _SunDiscSize ("Sun Disc Size", Float) = 0.9997
+        _MoonDiscSize ("Moon Disc Size", Float) = 0.9994
         _Exposure ("Exposure", Float) = 15
-        _GroundColor ("Ground Color", Color) = (0.05, 0.05, 0.04, 1)
+        _NightAmbient ("Night Ambient", Float) = 0.012
+        _StarIntensity ("Star Intensity", Float) = 0.8
+        _SunFade ("Sun Fade", Float) = 1
+        _MoonFade ("Moon Fade", Float) = 0
     }
 
     SubShader
@@ -37,26 +45,34 @@ Shader "SkyPlanB/HillaireSky"
 
             TEXTURE2D(_SkyViewLUT);
             SAMPLER(sampler_SkyViewLUT);
+            TEXTURE2D(_StarTex);
+            SAMPLER(sampler_StarTex);
 
-            struct Attributes
-            {
-                float4 positionOS : POSITION;
-            };
-
-            struct Varyings
-            {
-                float4 positionCS : SV_POSITION;
-                float3 viewDirOS  : TEXCOORD0;
-            };
+            struct Attributes { float4 positionOS : POSITION; };
+            struct Varyings { float4 positionCS : SV_POSITION; float3 viewDirOS : TEXCOORD0; };
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _SunDirection;
+                float4 _MoonDirection;
                 float4 _SunColor;
+                float4 _MoonColor;
                 float _SunIntensity;
+                float _MoonIntensity;
                 float _SunDiscSize;
+                float _MoonDiscSize;
                 float _Exposure;
-                float4 _GroundColor;
+                float _NightAmbient;
+                float _StarIntensity;
+                float _SunFade;
+                float _MoonFade;
             CBUFFER_END
+
+            float Hash12(float2 p)
+            {
+                float3 p3 = frac(float3(p.xyx) * 0.1031);
+                p3 += dot(p3, p3.yzx + 33.33);
+                return frac((p3.x + p3.y) * p3.z);
+            }
 
             Varyings vert(Attributes input)
             {
@@ -66,14 +82,9 @@ Shader "SkyPlanB/HillaireSky"
                 return o;
             }
 
-            // ACES filmic tone mapping (same as URP)
             float3 ACESFilm(float3 x)
             {
-                float a = 2.51;
-                float b = 0.03;
-                float c = 2.43;
-                float d = 0.59;
-                float e = 0.14;
+                float a = 2.51; float b = 0.03; float c = 2.43; float d = 0.59; float e = 0.14;
                 return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
             }
 
@@ -81,39 +92,78 @@ Shader "SkyPlanB/HillaireSky"
             {
                 float3 viewDir = normalize(input.viewDirOS);
 
-                // Below horizon: ground color
-                if (viewDir.y < -0.01)
-                {
-                    float fade = saturate((-viewDir.y - 0.01) / 0.15);
-                    return half4(_GroundColor.rgb * (1.0 - fade * 0.7), 1);
-                }
-
-                // Sky View LUT UV (must match compute shader mapping)
+                // ---- Sky View LUT sampling ----
                 float latitude = asin(clamp(viewDir.y, -1, 1));
                 float longitude = atan2(viewDir.x, viewDir.z);
-
-                // V: non-linear latitude (Hillaire)
                 float latParam = sign(latitude) * sqrt(abs(latitude) / (PI * 0.5));
                 float v = latParam * 0.5 + 0.5;
-
-                // U: longitude centered (compute uses uv.x-0.5 mapping)
                 float u = longitude / (2.0 * PI) + 0.5;
 
                 float3 skyColor = SAMPLE_TEXTURE2D(_SkyViewLUT, sampler_SkyViewLUT, float2(u, v)).rgb;
 
-                // Sun disc (composited on top — LUT can't capture it)
+                // ---- Night ambient (prevents pure black at night) ----
+                float3 nightColor = float3(0.01, 0.012, 0.03) * _NightAmbient;
+                skyColor = max(skyColor, nightColor);
+
+                // ---- Ground: soft fade from horizon color, not hard cutoff ----
+                if (viewDir.y < 0)
+                {
+                    // Sample horizon color at y=0
+                    float latH = 0;
+                    float latParamH = 0;
+                    float vH = 0.5;
+                    float3 horizonColor = SAMPLE_TEXTURE2D(_SkyViewLUT, sampler_SkyViewLUT, float2(u, vH)).rgb;
+                    horizonColor = max(horizonColor, nightColor);
+
+                    // Blend toward darker ground
+                    float groundFade = saturate(-viewDir.y / 0.25);
+                    skyColor = lerp(horizonColor, horizonColor * 0.4 + nightColor, groundFade);
+                }
+
+                // ---- Sun disc ----
                 float3 sunDir = normalize(_SunDirection.xyz);
-                float cosAngle = dot(viewDir, sunDir);
-                float sunDisc = smoothstep(_SunDiscSize, _SunDiscSize + 0.0003, cosAngle);
-                // Sun limb darkening
-                float limbDarken = 1.0 - 0.4 * (1.0 - smoothstep(_SunDiscSize + 0.0001, _SunDiscSize + 0.0003, cosAngle));
-                float3 sunContrib = sunDisc * limbDarken * _SunColor.rgb * _SunIntensity;
+                float sunCos = dot(viewDir, sunDir);
+                float sunDisc = smoothstep(_SunDiscSize, _SunDiscSize + 0.0003, sunCos);
+                float3 sunContrib = sunDisc * _SunColor.rgb * _SunIntensity * _SunFade;
 
-                // Combine and tone map
-                float3 color = (skyColor + sunContrib) * _Exposure;
+                // ---- Moon disc + halo ----
+                float3 moonDir = normalize(_MoonDirection.xyz);
+                float moonCos = dot(viewDir, moonDir);
+                float moonDisc = smoothstep(_MoonDiscSize, _MoonDiscSize + 0.0004, moonCos);
+                float moonHalo = smoothstep(0.03, 0.0, 1.0 - moonCos) * 0.3;
+                float3 moonContrib = (moonDisc * 3.0 + moonHalo) * _MoonColor.rgb * _MoonIntensity * _MoonFade;
+
+                // ---- Stars (only at night) ----
+                float3 starColor = 0;
+                if (_MoonFade > 0.05 && viewDir.y > 0)
+                {
+                    float3 absDir = abs(viewDir);
+                    float2 starUv;
+                    if (absDir.y >= absDir.x && absDir.y >= absDir.z)
+                        starUv = viewDir.xz / max(absDir.y, 0.001) * 0.5 + 0.5;
+                    else if (absDir.x >= absDir.z)
+                        starUv = viewDir.yz / max(absDir.x, 0.001) * 0.5 + float2(3.2, 0.5);
+                    else
+                        starUv = viewDir.xy / max(absDir.z, 0.001) * 0.5 + float2(5.8, 0.5);
+
+                    float2 tiledUv = frac(starUv * 1.5);
+                    float4 starSample = SAMPLE_TEXTURE2D(_StarTex, sampler_StarTex, tiledUv);
+                    float starLuma = dot(starSample.rgb, float3(0.2126, 0.7152, 0.0722));
+
+                    // Twinkle
+                    float2 starCell = floor(starUv * 768.0);
+                    float seed = Hash12(starCell + 17.0);
+                    float speed = lerp(1.5, 5.0, seed);
+                    float wave = sin(_Time.y * speed + seed * 6.283) * 0.5 + 0.5;
+                    float twinkle = lerp(1.0, lerp(0.5, 1.4, wave), smoothstep(0.04, 0.15, starLuma));
+
+                    float horizFade = smoothstep(0.0, 0.12, viewDir.y);
+                    starColor = starSample.rgb * horizFade * _StarIntensity * _MoonFade * twinkle;
+                }
+
+                // ---- Combine ----
+                float3 color = (skyColor + sunContrib + moonContrib + starColor) * _Exposure;
                 color = ACESFilm(color);
-
-                // sRGB gamma
                 color = pow(max(color, 0), 1.0 / 2.2);
 
                 return half4(color, 1);

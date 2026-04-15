@@ -53,6 +53,14 @@ namespace SkyPlanB
         static readonly int ID_SunIntensity = Shader.PropertyToID("_SunIntensity");
         static readonly int ID_SunDiscSize = Shader.PropertyToID("_SunDiscSize");
         static readonly int ID_Exposure = Shader.PropertyToID("_Exposure");
+        static readonly int ID_MoonDirection = Shader.PropertyToID("_MoonDirection");
+        static readonly int ID_MoonColor = Shader.PropertyToID("_MoonColor");
+        static readonly int ID_MoonIntensity = Shader.PropertyToID("_MoonIntensity");
+        static readonly int ID_MoonDiscSize = Shader.PropertyToID("_MoonDiscSize");
+        static readonly int ID_SunFade = Shader.PropertyToID("_SunFade");
+        static readonly int ID_MoonFade = Shader.PropertyToID("_MoonFade");
+        static readonly int ID_NightAmbient = Shader.PropertyToID("_NightAmbient");
+        static readonly int ID_StarIntensity = Shader.PropertyToID("_StarIntensity");
 
         void Awake()
         {
@@ -114,13 +122,30 @@ namespace SkyPlanB
             }
 
             Vector3 sunDir = CalculateSunDirection(timeOfDay);
+            Vector3 moonDir = CalculateMoonDirection(timeOfDay);
+
+            // Sun/moon fade (same timing as Plan A)
+            float sunFade = 1f;
+            float moonFade = 0f;
+            if (timeOfDay > 20f)
+            {
+                sunFade = 1f - Mathf.Clamp01((timeOfDay - 21.5f) * 2f);
+                moonFade = Mathf.Clamp01((timeOfDay - 21.5f - 0.25f) * 2f);
+            }
+            else if (timeOfDay < 6f)
+            {
+                sunFade = Mathf.Clamp01((timeOfDay - 4.5f - 0.25f) * 2f);
+                moonFade = 1f - Mathf.Clamp01((timeOfDay - 4.5f) * 2f);
+            }
+            moonFade *= Mathf.Clamp01(moonDir.y / 0.1f);
 
             // Update directional light
             if (directionalLight != null)
             {
-                directionalLight.transform.rotation = Quaternion.LookRotation(-sunDir);
-                directionalLight.color = sunColor;
-                directionalLight.intensity = Mathf.Max(0.02f, sunDir.y);
+                Vector3 lightDir = sunFade > moonFade ? sunDir : moonDir;
+                directionalLight.transform.rotation = Quaternion.LookRotation(-lightDir);
+                directionalLight.color = sunFade > moonFade ? sunColor : new Color(0.6f, 0.7f, 0.9f);
+                directionalLight.intensity = Mathf.Max(0.02f, sunFade > 0.5f ? sunDir.y : 0.1f);
             }
 
             // Dispatch compute shader
@@ -131,10 +156,18 @@ namespace SkyPlanB
             {
                 skyMaterial.SetTexture(ID_SkyViewLUT, skyViewRT);
                 skyMaterial.SetVector(ID_SunDirection, sunDir);
+                skyMaterial.SetVector(ID_MoonDirection, moonDir);
                 skyMaterial.SetColor(ID_SunColor, sunColor);
+                skyMaterial.SetColor(ID_MoonColor, new Color(0.6f, 0.7f, 0.9f));
                 skyMaterial.SetFloat(ID_SunIntensity, sunIntensity);
+                skyMaterial.SetFloat(ID_MoonIntensity, 0.6f);
                 skyMaterial.SetFloat(ID_SunDiscSize, sunDiscSize);
+                skyMaterial.SetFloat(ID_MoonDiscSize, 0.9994f);
                 skyMaterial.SetFloat(ID_Exposure, exposure);
+                skyMaterial.SetFloat(ID_SunFade, sunFade);
+                skyMaterial.SetFloat(ID_MoonFade, moonFade);
+                skyMaterial.SetFloat(ID_NightAmbient, Mathf.Lerp(1f, 0f, sunFade));
+                skyMaterial.SetFloat(ID_StarIntensity, 0.8f);
             }
 
             // Track camera
@@ -185,6 +218,11 @@ namespace SkyPlanB
                 hideFlags = HideFlags.DontSave
             };
 
+            // Bind star texture (reuse Plan A's or load from Resources)
+            Texture2D starTex = Resources.Load<Texture2D>("StarfieldTex");
+            if (starTex != null)
+                skyMaterial.SetTexture(Shader.PropertyToID("_StarTex"), starTex);
+
             domeRenderer.sharedMaterial = skyMaterial;
             domeRenderer.shadowCastingMode = ShadowCastingMode.Off;
             domeRenderer.receiveShadows = false;
@@ -228,6 +266,20 @@ namespace SkyPlanB
             float azimuth = Mathf.Cos(angle);
             // Tilt the orbit 55 degrees like GTA5 reference
             float tilt = 55f * Mathf.Deg2Rad;
+            return new Vector3(
+                azimuth * Mathf.Cos(tilt),
+                elevation,
+                azimuth * Mathf.Sin(tilt)
+            ).normalized;
+        }
+
+        static Vector3 CalculateMoonDirection(float hours)
+        {
+            // Moon is opposite to sun + slight offset
+            float angle = (hours / 24f) * Mathf.PI * 2f - Mathf.PI * 0.5f + Mathf.PI;
+            float elevation = Mathf.Sin(angle);
+            float azimuth = Mathf.Cos(angle);
+            float tilt = 49f * Mathf.Deg2Rad; // slightly different from sun
             return new Vector3(
                 azimuth * Mathf.Cos(tilt),
                 elevation,
