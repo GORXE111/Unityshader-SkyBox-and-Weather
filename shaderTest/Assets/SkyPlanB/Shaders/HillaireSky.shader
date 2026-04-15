@@ -88,34 +88,66 @@ Shader "SkyPlanB/HillaireSky"
                 return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
             }
 
+            // Hillaire SkyViewLutParamsToUv (exact from source)
+            float2 SkyViewParamsToUv(float3 viewDir, float3 sunDir, float viewHeight)
+            {
+                float R_BOT = 6360.0;
+                float Vhorizon = sqrt(max(viewHeight * viewHeight - R_BOT * R_BOT, 0));
+                float CosBeta = Vhorizon / viewHeight;
+                float Beta = acos(CosBeta);
+                float ZenithHorizonAngle = PI - Beta;
+
+                // viewZenithCosAngle = viewDir.y (local up = Y in sky dome)
+                float viewZenithCosAngle = viewDir.y;
+                bool intersectGround = viewZenithCosAngle < CosBeta;
+
+                float2 uv;
+                if (!intersectGround)
+                {
+                    float coord = acos(viewZenithCosAngle) / ZenithHorizonAngle;
+                    coord = 1.0 - coord;
+                    coord = sqrt(max(coord, 0)); // non-linear inverse
+                    coord = 1.0 - coord;
+                    uv.y = coord * 0.5;
+                }
+                else
+                {
+                    float coord = (acos(viewZenithCosAngle) - ZenithHorizonAngle) / max(Beta, 0.0001);
+                    coord = sqrt(max(coord, 0)); // non-linear inverse
+                    uv.y = coord * 0.5 + 0.5;
+                }
+
+                // lightViewCosAngle: cos angle between view dir and sun dir projected onto horizon plane
+                float3 viewHoriz = normalize(float3(viewDir.x, 0, viewDir.z));
+                float3 sunHoriz = normalize(float3(sunDir.x, 0, sunDir.z));
+                float lightViewCosAngle = dot(viewHoriz, sunHoriz);
+
+                float coordX = -lightViewCosAngle * 0.5 + 0.5;
+                coordX = sqrt(max(coordX, 0)); // non-linear inverse
+                uv.x = coordX;
+
+                return uv;
+            }
+
             half4 frag(Varyings input) : SV_Target
             {
                 float3 viewDir = normalize(input.viewDirOS);
+                float3 sunDir = normalize(_SunDirection.xyz);
+                float viewHeight = 6360.0 + 0.001; // ground level
 
-                // ---- Sky View LUT sampling ----
-                float latitude = asin(clamp(viewDir.y, -1, 1));
-                float longitude = atan2(viewDir.x, viewDir.z);
-                float latParam = sign(latitude) * sqrt(abs(latitude) / (PI * 0.5));
-                float v = latParam * 0.5 + 0.5;
-                float u = longitude / (2.0 * PI) + 0.5;
+                // ---- Sky View LUT sampling (Hillaire mapping) ----
+                float2 uv = SkyViewParamsToUv(viewDir, sunDir, viewHeight);
+                float3 skyColor = SAMPLE_TEXTURE2D(_SkyViewLUT, sampler_SkyViewLUT, uv).rgb;
 
-                float3 skyColor = SAMPLE_TEXTURE2D(_SkyViewLUT, sampler_SkyViewLUT, float2(u, v)).rgb;
-
-                // ---- Night ambient (prevents pure black at night) ----
+                // ---- Night ambient ----
                 float3 nightColor = float3(0.01, 0.012, 0.03) * _NightAmbient;
                 skyColor = max(skyColor, nightColor);
 
-                // ---- Ground: soft fade from horizon color, not hard cutoff ----
+                // ---- Ground: soft fade ----
                 if (viewDir.y < 0)
                 {
-                    // Sample horizon color at y=0
-                    float latH = 0;
-                    float latParamH = 0;
-                    float vH = 0.5;
-                    float3 horizonColor = SAMPLE_TEXTURE2D(_SkyViewLUT, sampler_SkyViewLUT, float2(u, vH)).rgb;
+                    float3 horizonColor = SAMPLE_TEXTURE2D(_SkyViewLUT, sampler_SkyViewLUT, float2(uv.x, 0.0)).rgb;
                     horizonColor = max(horizonColor, nightColor);
-
-                    // Blend toward darker ground
                     float groundFade = saturate(-viewDir.y / 0.25);
                     skyColor = lerp(horizonColor, horizonColor * 0.4 + nightColor, groundFade);
                 }

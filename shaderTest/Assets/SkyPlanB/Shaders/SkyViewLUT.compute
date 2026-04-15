@@ -1,5 +1,5 @@
-// Compute shader: generates Sky View LUT per frame
-// Based on Hillaire 2020
+// Sky View LUT compute shader - faithful port of Hillaire 2020
+// Source: github.com/sebh/UnrealEngineSkyAtmosphere
 #pragma kernel CSMain
 
 RWTexture2D<float4> _SkyViewLUT;
@@ -10,165 +10,243 @@ SamplerState sampler_MultiScatterLUT;
 
 float3 _SunDirection;
 float _CameraHeight;
-float4 _SkyViewSize;
+float4 _SkyViewSize; // x=width, y=height, z=1/w, w=1/h
+float3 _SunIlluminance;
 
-static const float R_GROUND = 6360.0;
+static const float R_BOT = 6360.0;
 static const float R_TOP = 6460.0;
-static const float3 SIGMA_R = float3(5.802, 13.558, 33.1) * 1e-3;
-static const float H_RAYLEIGH = 8.0;
-static const float SIGMA_M_S = 3.996e-3;
-static const float SIGMA_M_E = SIGMA_M_S + 4.40e-3;
-static const float H_MIE = 1.2;
+static const float3 SIGMA_R = float3(0.005802, 0.013558, 0.033100);
+static const float H_R = 8.0;
+static const float SIGMA_M_S = 0.003996;
+static const float SIGMA_M_E = 0.004440;
+static const float H_M = 1.2;
 static const float MIE_G = 0.8;
-static const float3 SIGMA_O = float3(0.650, 1.881, 0.085) * 1e-3;
+static const float3 SIGMA_O = float3(0.000650, 0.001881, 0.000085);
 static const float PI = 3.14159265359;
+static const float PLANET_RADIUS_OFFSET = 0.01;
 
-float3 Extinction(float h)
+// ---- Medium sampling (exact from source) ----
+struct MediumSample
 {
-    float rd = exp(-h / H_RAYLEIGH);
-    float md = exp(-h / H_MIE);
-    float od = max(0, 1.0 - abs(h - 25.0) / 15.0);
-    return SIGMA_R * rd + SIGMA_M_E * md + SIGMA_O * od;
+    float3 scattering;
+    float3 extinction;
+    float3 scatteringMie;
+    float3 scatteringRay;
+};
+
+MediumSample SampleMedium(float3 worldPos)
+{
+    float h = length(worldPos) - R_BOT;
+    float densityRay = exp(-h / H_R);
+    float densityMie = exp(-h / H_M);
+    // Ozone piecewise linear (Hillaire source)
+    float densityOzo = (h < 25.0) ?
+        saturate((1.0/15.0)*h + (-2.0/3.0)) :
+        saturate((-1.0/15.0)*h + (8.0/3.0));
+
+    MediumSample s;
+    s.scatteringRay = densityRay * SIGMA_R;
+    s.scatteringMie = densityMie * SIGMA_M_S;
+    float3 extinctionMie = densityMie * SIGMA_M_E;
+    float3 absorptionOzo = densityOzo * SIGMA_O;
+    s.scattering = s.scatteringRay + s.scatteringMie;
+    s.extinction = s.scatteringRay + extinctionMie + absorptionOzo;
+    return s;
 }
 
-float3 Scattering(float h)
-{
-    float rd = exp(-h / H_RAYLEIGH);
-    float md = exp(-h / H_MIE);
-    return SIGMA_R * rd + SIGMA_M_S * md;
-}
-
+// ---- Phase functions (exact from source) ----
 float RayleighPhase(float cosTheta)
 {
-    return 3.0 / (16.0 * PI) * (1.0 + cosTheta * cosTheta);
+    return (3.0 / (16.0 * PI)) * (1.0 + cosTheta * cosTheta);
 }
 
-float MiePhase(float cosTheta, float g)
+float CornetteShanksMiePhase(float g, float cosTheta)
 {
-    float g2 = g * g;
-    float num = 3.0 * (1.0 - g2) * (1.0 + cosTheta * cosTheta);
-    float den = (8.0 * PI) * (2.0 + g2) * pow(max(1.0 + g2 - 2.0 * g * cosTheta, 0.0001), 1.5);
-    return num / den;
+    float k = 3.0 / (8.0 * PI) * (1.0 - g * g) / (2.0 + g * g);
+    return k * (1.0 + cosTheta * cosTheta) / pow(max(1.0 + g * g - 2.0 * g * cosTheta, 0.0001), 1.5);
 }
 
-float2 RaySphereIntersect(float3 pos, float3 dir, float radius)
+// ---- Ray-sphere intersection (exact from source) ----
+float raySphereIntersectNearest(float3 r0, float3 rd, float3 s0, float sR)
 {
-    float b = dot(pos, dir);
-    float c = dot(pos, pos) - radius * radius;
-    float disc = b * b - c;
-    if (disc < 0) return float2(-1, -1);
-    float sqrtDisc = sqrt(disc);
-    return float2(-b - sqrtDisc, -b + sqrtDisc);
+    float a = dot(rd, rd);
+    float3 s0_r0 = r0 - s0;
+    float b = 2.0 * dot(rd, s0_r0);
+    float c = dot(s0_r0, s0_r0) - (sR * sR);
+    float delta = b * b - 4.0*a*c;
+    if (delta < 0.0 || a == 0.0) return -1.0;
+    float sol0 = (-b - sqrt(delta)) / (2.0*a);
+    float sol1 = (-b + sqrt(delta)) / (2.0*a);
+    if (sol0 < 0.0 && sol1 < 0.0) return -1.0;
+    if (sol0 < 0.0) return max(0.0, sol1);
+    if (sol1 < 0.0) return max(0.0, sol0);
+    return max(0.0, min(sol0, sol1));
 }
 
-float3 SampleTransmittance(float h, float cosZenith)
+// ---- Transmittance LUT sampling (EXACT Hillaire UV mapping) ----
+float3 SampleTransmittanceLUT(float viewHeight, float viewZenithCosAngle)
 {
-    float v = sqrt(h / (R_TOP - R_GROUND));
-    float r = R_GROUND + h;
-    float cosHorizon = -sqrt(max(1.0 - (R_GROUND / r) * (R_GROUND / r), 0.0));
-    float u;
-    if (cosZenith < cosHorizon)
+    float H = sqrt(max(0.0, R_TOP * R_TOP - R_BOT * R_BOT));
+    float rho = sqrt(max(0.0, viewHeight * viewHeight - R_BOT * R_BOT));
+
+    float discriminant = viewHeight * viewHeight * (viewZenithCosAngle * viewZenithCosAngle - 1.0) + R_TOP * R_TOP;
+    float d = max(0.0, (-viewHeight * viewZenithCosAngle + sqrt(max(discriminant, 0))));
+
+    float d_min = R_TOP - viewHeight;
+    float d_max = rho + H;
+    float x_mu = (d - d_min) / max(d_max - d_min, 0.0001);
+    float x_r = rho / max(H, 0.0001);
+
+    return _TransmittanceLUT.SampleLevel(sampler_TransmittanceLUT, float2(x_mu, x_r), 0).rgb;
+}
+
+// ---- Multi-scatter LUT sampling (exact from source) ----
+float3 GetMultipleScattering(float3 worldPos, float viewZenithCosAngle)
+{
+    float2 uv = saturate(float2(
+        viewZenithCosAngle * 0.5 + 0.5,
+        (length(worldPos) - R_BOT) / (R_TOP - R_BOT)));
+    return _MultiScatterLUT.SampleLevel(sampler_MultiScatterLUT, uv, 0).rgb;
+}
+
+// ---- Sky View LUT UV mapping (exact from source) ----
+void UvToSkyViewLutParams(float viewHeight, float2 uv, out float viewZenithCosAngle, out float lightViewCosAngle)
+{
+    float Vhorizon = sqrt(max(viewHeight * viewHeight - R_BOT * R_BOT, 0));
+    float CosBeta = Vhorizon / viewHeight;
+    float Beta = acos(CosBeta);
+    float ZenithHorizonAngle = PI - Beta;
+
+    if (uv.y < 0.5)
     {
-        float t = sqrt(max((cosHorizon - cosZenith) / (1.0 + cosHorizon), 0));
-        u = t * 0.5;
+        float coord = 2.0 * uv.y;
+        coord = 1.0 - coord;
+        coord *= coord; // non-linear
+        coord = 1.0 - coord;
+        viewZenithCosAngle = cos(ZenithHorizonAngle * coord);
     }
     else
     {
-        float t = sqrt(max((cosZenith - cosHorizon) / (1.0 - cosHorizon), 0));
-        u = 0.5 + t * 0.5;
+        float coord = uv.y * 2.0 - 1.0;
+        coord *= coord; // non-linear
+        viewZenithCosAngle = cos(ZenithHorizonAngle + Beta * coord);
     }
-    return _TransmittanceLUT.SampleLevel(sampler_TransmittanceLUT, float2(u, v), 0).rgb;
+
+    float coordX = uv.x;
+    coordX *= coordX; // non-linear
+    lightViewCosAngle = -(coordX * 2.0 - 1.0);
 }
 
-float3 SampleMultiScatter(float h, float cosSunZenith)
+bool MoveToTopAtmosphere(inout float3 worldPos, float3 worldDir)
 {
-    float u = cosSunZenith * 0.5 + 0.5;
-    float v = sqrt(h / (R_TOP - R_GROUND));
-    return _MultiScatterLUT.SampleLevel(sampler_MultiScatterLUT, float2(u, v), 0).rgb;
+    float viewHeight = length(worldPos);
+    if (viewHeight > R_TOP)
+    {
+        float tTop = raySphereIntersectNearest(worldPos, worldDir, float3(0,0,0), R_TOP);
+        if (tTop >= 0.0)
+        {
+            float3 upOffset = (worldPos / viewHeight) * -PLANET_RADIUS_OFFSET;
+            worldPos = worldPos + worldDir * tTop + upOffset;
+        }
+        else return false;
+    }
+    return true;
 }
 
 [numthreads(8, 8, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x >= (uint)_SkyViewSize.x || id.y >= (uint)_SkyViewSize.y)
-        return;
+    if (id.x >= (uint)_SkyViewSize.x || id.y >= (uint)_SkyViewSize.y) return;
 
     float2 uv = (id.xy + 0.5) * _SkyViewSize.zw;
+    float viewHeight = R_BOT + max(_CameraHeight, 0.001);
 
-    // Longitude: [0,1] -> [-π, π] (centered so u=0.5 = forward)
-    float longitude = (uv.x - 0.5) * 2.0 * PI;
+    float viewZenithCosAngle, lightViewCosAngle;
+    UvToSkyViewLutParams(viewHeight, uv, viewZenithCosAngle, lightViewCosAngle);
 
-    // Latitude: non-linear, more texels near horizon
-    float latitudeParam = uv.y * 2.0 - 1.0;
-    float latitude = sign(latitudeParam) * (latitudeParam * latitudeParam) * (PI * 0.5);
+    // Build sun direction in local frame (exact from source)
+    float3 sunDir = normalize(_SunDirection);
+    float3 upVector = float3(0, 0, 1); // local frame: Z is up
+    float sunZenithCosAngle = dot(upVector, sunDir);
+    float3 SunDir = normalize(float3(
+        sqrt(max(1.0 - sunZenithCosAngle * sunZenithCosAngle, 0)), 0.0, sunZenithCosAngle));
 
-    float cosLat = cos(latitude);
-    float sinLat = sin(latitude);
-    float cosLon = cos(longitude);
-    float sinLon = sin(longitude);
-    float3 viewDir = float3(cosLat * sinLon, sinLat, cosLat * cosLon);
+    // Build world position and direction (exact from source)
+    float3 WorldPos = float3(0, 0, viewHeight);
+    float viewZenithSinAngle = sqrt(max(1 - viewZenithCosAngle * viewZenithCosAngle, 0));
+    float3 WorldDir = float3(
+        viewZenithSinAngle * lightViewCosAngle,
+        viewZenithSinAngle * sqrt(max(1.0 - lightViewCosAngle * lightViewCosAngle, 0)),
+        viewZenithCosAngle);
 
-    float3 camPos = float3(0, R_GROUND + _CameraHeight, 0);
-
-    float2 tAtmo = RaySphereIntersect(camPos, viewDir, R_TOP);
-    float tMax = tAtmo.y;
-
-    float2 tGround = RaySphereIntersect(camPos, viewDir, R_GROUND);
-    if (tGround.x > 0 && viewDir.y < 0)
-        tMax = min(tMax, tGround.x);
-
-    if (tMax <= 0)
+    if (!MoveToTopAtmosphere(WorldPos, WorldDir))
     {
         _SkyViewLUT[id.xy] = float4(0, 0, 0, 1);
         return;
     }
 
-    float3 sunDir = normalize(_SunDirection);
-    float cosViewSun = dot(viewDir, sunDir);
+    // Ray march (based on IntegrateScatteredLuminance)
+    float3 earthO = float3(0, 0, 0);
+    float tBottom = raySphereIntersectNearest(WorldPos, WorldDir, earthO, R_BOT);
+    float tTop = raySphereIntersectNearest(WorldPos, WorldDir, earthO, R_TOP);
+    float tMax = 0;
+    if (tBottom < 0) { if (tTop < 0) { _SkyViewLUT[id.xy] = float4(0,0,0,1); return; } tMax = tTop; }
+    else { if (tTop > 0) tMax = min(tTop, tBottom); }
 
-    const int STEPS = 32;
-    float dt = tMax / STEPS;
-    float3 luminance = 0;
-    float3 transmittance = 1;
+    float cosTheta = dot(SunDir, WorldDir);
+    float miePhaseValue = CornetteShanksMiePhase(MIE_G, -cosTheta);
+    float rayleighPhaseValue = RayleighPhase(cosTheta);
+    float3 globalL = _SunIlluminance;
 
-    for (int i = 0; i < STEPS; i++)
+    // Adaptive sample count (from source)
+    float SampleCount = lerp(20.0, 40.0, saturate(tMax * 0.01));
+    float SampleCountFloor = floor(SampleCount);
+    float tMaxFloor = tMax * SampleCountFloor / SampleCount;
+
+    float3 L = 0;
+    float3 throughput = 1;
+    float t = 0;
+    const float SampleSegmentT = 0.3;
+
+    for (float s = 0; s < SampleCount; s += 1.0)
     {
-        float t = (i + 0.5) * dt;
-        float3 pos = camPos + viewDir * t;
-        float h = length(pos) - R_GROUND;
-        h = clamp(h, 0, R_TOP - R_GROUND);
+        // Non-linear sample distribution (exact from source)
+        float t0 = s / SampleCountFloor;
+        float t1 = (s + 1.0) / SampleCountFloor;
+        t0 = t0 * t0;
+        t1 = t1 * t1;
+        t0 = tMaxFloor * t0;
+        t1 = (t1 > 1.0) ? tMax : tMaxFloor * t1;
+        t = t0 + (t1 - t0) * SampleSegmentT;
+        float dt = t1 - t0;
 
-        float3 ext = Extinction(h);
+        float3 P = WorldPos + t * WorldDir;
+        MediumSample medium = SampleMedium(P);
 
-        float cosSunZenith = dot(normalize(pos), sunDir);
-        float3 T_sun = SampleTransmittance(h, cosSunZenith);
+        float3 sampleTransmittance = exp(-medium.extinction * dt);
 
-        // Ground shadow
-        float2 tSunGround = RaySphereIntersect(pos, sunDir, R_GROUND);
-        float shadow = (tSunGround.x > 0 && tSunGround.y > 0) ? 0.0 : 1.0;
+        float pHeight = length(P);
+        float3 upVec = P / pHeight;
+        float sunZenithCos = dot(SunDir, upVec);
 
-        float phaseR = RayleighPhase(cosViewSun);
-        float phaseM = MiePhase(cosViewSun, MIE_G);
+        float3 T_sun = SampleTransmittanceLUT(pHeight, sunZenithCos);
 
-        float rd = exp(-h / H_RAYLEIGH);
-        float md = exp(-h / H_MIE);
+        float3 phaseTimesScattering = medium.scatteringMie * miePhaseValue + medium.scatteringRay * rayleighPhaseValue;
 
-        // Single scattering (solar irradiance = 1.0, exposure handles brightness)
-        float3 scatterR = SIGMA_R * rd * phaseR;
-        float3 scatterM = SIGMA_M_S * md * phaseM;
-        float3 inScatter = (scatterR + scatterM) * T_sun * shadow;
+        // Earth shadow
+        float tEarth = raySphereIntersectNearest(P, SunDir, earthO + PLANET_RADIUS_OFFSET * upVec, R_BOT);
+        float earthShadow = tEarth >= 0.0 ? 0.0 : 1.0;
 
-        // Multi scattering — small additive contribution
-        float3 ms = SampleMultiScatter(h, cosSunZenith);
-        float3 scat = Scattering(h);
-        inScatter += ms * scat * 0.1;
+        // Multi scattering
+        float3 ms = GetMultipleScattering(P, sunZenithCos);
 
-        // Integrate with analytical in-scatter
-        float3 sampleT = exp(-ext * dt);
-        float3 intScatter = (1.0 - sampleT) / max(ext, 0.0001) * inScatter;
-        luminance += transmittance * intScatter;
-        transmittance *= sampleT;
+        float3 S = globalL * (earthShadow * T_sun * phaseTimesScattering + ms * medium.scattering);
+
+        // Frostbite analytical integration
+        float3 Sint = (S - S * sampleTransmittance) / max(medium.extinction, 0.00001);
+        L += throughput * Sint;
+        throughput *= sampleTransmittance;
     }
 
-    _SkyViewLUT[id.xy] = float4(luminance, 1);
+    _SkyViewLUT[id.xy] = float4(L, 1);
 }

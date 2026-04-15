@@ -253,6 +253,7 @@ namespace SkyPlanB
             skyViewCompute.SetVector(ID_SunDirection, sunDir);
             skyViewCompute.SetFloat(ID_CameraHeight, cameraHeight);
             skyViewCompute.SetVector(ID_SkyViewSize, new Vector4(lutWidth, lutHeight, 1f / lutWidth, 1f / lutHeight));
+            skyViewCompute.SetVector(Shader.PropertyToID("_SunIlluminance"), (Vector4)(sunColor * 1.0f));
 
             int groupsX = Mathf.CeilToInt(lutWidth / 8f);
             int groupsY = Mathf.CeilToInt(lutHeight / 8f);
